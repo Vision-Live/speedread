@@ -27,9 +27,15 @@ Controls
 
 speedread is slightly interactive, with these controls accepted:
 
-  * [ - slow down by 10%
-  * ] - speed up by 10%
-  * space - pause (and show the last two lines of context)
+  * , or h - slow down by 50 WPM
+  * . or l - speed up by 50 WPM
+  * space or p - pause
+  * j or < - go down by 1 word (i.e. next word)
+  * J - go down by 10 words
+  * k or > - go up by 1 words (i.e. previous word)
+  * K - go up by 10 words
+  * space or p - pause (and show the last two lines)
+  * q - quit
 
 Integration Recipes
 -------------------
