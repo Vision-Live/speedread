@@ -217,85 +217,21 @@ sub print_context_org {
 	say $line0;
 }
 
-sub process_keys {
-	# OLD CODE, NOT USED
-	my ($word, $i, $wn) = @_;
-	while ($tty->key_pressed()) {
-		my $ch = $tty->getch();
-		if ($ch eq '[') {
-			$wpm = int($wpm - 50);
-
-		} elsif ($ch eq ']') {
-			$wpm = int($wpm + 50);
-
-		} elsif ($ch eq ' ' | $ch eq 'p') {
-			$paused = not $paused;
-			if ($paused) {
-				# Print context.
-				# print_context_org($wn);
-				# show_guide();
-				# show_word($word, $i);
-			}
-			else {
-				# clear_context();
-				$next_word_time = time();
-			}
-		} elsif ($ch eq '<') {
-			#TODO: move backwards through the text
-			if ($paused and $wn > 0) {
-				$wn--;
-			}
-		} elsif ($ch eq '>') {
-			#TODO: move forwards through the text
-			if ($paused) {
-				$wn++;
-			}
-		} elsif ($ch eq 'q') {
-			print_stats();
-			# sleep(0.1); #FS: not sure what's the point of this
-			exit();
-		}
-	}
-}
-
-sub step {
-	my ($step, @lines, $ln, @words, $wn) = @_;
-	if ($step == 1){
-		if ($wn < $#words) { $wn++; } elsif ( $ln < $#lines ) { $ln++; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=0; }
-	} elsif ($step == -1) {
-		if ($wn > 0) { $wn--; } elsif ( $ln > 0 ) { $ln--; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=$#words; }
-	} else {
-		@words=split /(?:-|\s)+/, $lines[$ln];
-	}
-	return @lines, $ln, @words, $wn
-}
-
 sub main {
-	# print "\n";
-	# print "\n";
 	print "\n";
 	show_guide();
 
 	$next_word_time = time();
 	$next_input_time = time();
-	# my $ln = 0;
-
-	# my @lines = <>;
 	my $line;
 	@lines=<>;
 
 	for ($ln = 0; $ln <= $#lines; $ln++) {
 	    $line = $lines[$ln];
-	# while (<>) {
-	# 	chomp;
 
 		unshift @lastlines, $line;
-		# unshift @lastlines, $_;
-		# pop @lastlines if @lastlines > 2;
 
 		(@words) = split /(?:-|\s)+/, $line;
-		# my (@words) = grep { /./ } split /(?:-|\s)+/;
-		my @oldwords;
 
 		if ($multiword) {
 			# Join adjecent short words
@@ -307,15 +243,10 @@ sub main {
 			}
 		}
 
-		# $ln++;
 		$wn = -1;
-		# while (scalar(@words) > 0) {
 		while ($wn <= $#words) {
-		# for ($wn = 0; $wn <= $#words; $wn++) {
-			# $wn--;
 			if ($skipped < $resume) {
 				$skipped++;
-				# shift @words;
 				$wn++;
 				skip_word(@words);
 				next;
@@ -324,31 +255,17 @@ sub main {
 			my $current_time = time();
 
 			if ($next_word_time <= $current_time and !$paused) {
-				# $current_word = shift @words;
-				# unshift @oldwords, $current_word;
-				# $current_orp = find_ORP($current_word, $ORPloc);
-				# $next_word_time += word_time($current_word);
-				# $wordcounter++;
-				# $lettercounter += length($current_word);
-
-				# # unshift @oldwords, $current_word;
-				# $wn++;
-				# $wn++;
-
 				if ($wn < $#words) { $wn++; } elsif ( $ln < $#lines ) { $ln++; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=0; }
 				$current_word = $words[$wn];
 				$current_orp = find_ORP($current_word, $ORPloc);
 				$next_word_time += word_time($current_word);
 				$wordcounter++;
 				$lettercounter += length($current_word);
-				# step(1, @lines, $ln, @words, $wn)
 			}
 
 			if ($next_input_time <= $current_time) {
-				# process_keys($current_word, $current_orp, $wn);
 				while ($tty->key_pressed()) {
 					my $ch = $tty->getch();
-					# print "\n<$ch>";
 					if ($ch eq ',' or $ch eq 'h') { $wpm = int($wpm - 50); }
 					elsif ($ch eq '.' or $ch eq 'l') { $wpm = int($wpm + 50); }
 					elsif ($ch eq ' ' | $ch eq 'p') {
@@ -359,16 +276,13 @@ sub main {
 							$show_context = 1;
 						} else {
 							$show_context = 0;
-							# $paused = 0;
 						}
 					}
 					elsif ($ch eq '<' or $ch eq 'k' or $ch eq 'K') {
 						$imax = 1;
 						if ($ch eq 'K' and $wn > 0) { $imax = 10; }
 						for($i=1; $i<=$imax; $i++){
-							# print "\nB: ln: $ln, wn: $wn\n";
 							if ($wn > 0) { $wn--; } elsif ( $ln > 0 ) { $ln--; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=$#words; }
-							# print "\nA: ln: $ln, wn: $wn\n";
 							$current_word = $words[$wn];
 							$next_word_time += word_time($current_word);
 							$wordcounter--;
@@ -381,7 +295,6 @@ sub main {
 						if ($ch eq 'J') { $imax = 10; }
 						for($i=1; $i<=$imax; $i++){
 							if ($wn < $#words) { $wn++; } elsif ( $ln < $#lines ) { $ln++; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=0; }
-							# print "\nln: $ln, wn: $wn\n";
 							$current_word = $words[$wn];
 							$next_word_time += word_time($current_word);
 							$wordcounter++;
@@ -397,7 +310,6 @@ sub main {
 			# redrawing the word on each "frame" gives a more responsive UI
 			# (we don't have to wait for the word to change to display changed stats like wpm)
 			show_word($current_word, $current_orp, $wn, $ln);
-			# print "\nshowing word";
 
 			my $sleep_time = ($next_word_time < $next_input_time and !$paused) ? $next_word_time-$current_time : $next_input_time-$current_time;
 			sleep($sleep_time) if ($sleep_time > 0);
