@@ -23,13 +23,17 @@
 #
 #   , or h - slow down by 50 WPM
 #   . or l - speed up by 50 WPM
-#   space or p - pause
-#   j or < - go down by 1 word (i.e. next word)
-#   J - go down by 10 words
-#   k or > - go up by 1 words (i.e. previous word)
-#   K - go up by 10 words
-#   space or p - pause (and show the last two lines)
+#   space or p - pause or unpause
+#   return/enter - unpause
+#   o - toggle context mode
+#   j - go down by 1 word (i.e. next word)
+#   > - go to the next sentence
+#   J - go down by 5 words
+#   k - go up by 1 words (i.e. previous word)
+#   < - go to the beginning of the sentence (or previous sentence if at beginning)
+#   K - go up by 5 words
 #   q - quit
+# 
 
 use warnings;
 use strict;
@@ -39,6 +43,9 @@ use v5.14;
 my $wpm = 250;
 my $resume = 0;
 my $multiword = 0;
+my $min_word = 3;
+my $paused = 0;
+my $show_context = 0;
 
 
 use utf8;
@@ -50,11 +57,44 @@ use List::Util qw( min max );
 use Term::ANSIColor;
 use POSIX qw(ceil floor);
 use Time::HiRes qw(time sleep gettimeofday tv_interval);
+my ( $help, $pause_option );
 
-use Getopt::Long;
+my $HELP_TEXT = color("bold").
+"  speedread ".color("reset").": a commandline speedreading application
+    ".color("bold").color("green")."h      ".color("reset")."      print help
+    ".color("bold").color("green")."w=[val]".color("reset")."      reading speed in words per minute (default: 250 WPM)
+    ".color("bold").color("green")."r      ".color("reset")."      resume mode
+    ".color("bold").color("green")."p      ".color("reset")."      pause at end of sentences mode
+    ".color("bold").color("green")."m      ".color("reset")."      multiword mode (concatenate smaller words)
+    ".color("bold").color("green")."n=[val]".color("reset")."      maximum length of words to be concatenated (default: 3)
+
+keyboard shortcuts:
+    ".color("bold").color("red").", or h    ".color("reset")."      slow down by 50 WPM
+    ".color("bold").color("red").". or l    ".color("reset")."      speed up by 50 WPM
+    ".color("bold").color("red")."space or p".color("reset")."      pause
+    ".color("bold").color("red")."o         ".color("reset")."      toggle context mode
+    ".color("bold").color("red")."j or \<    ".color("reset")."      go down by 1 word (i.e. next word)
+    ".color("bold").color("red")."J         ".color("reset")."      go down by 5 words
+    ".color("bold").color("red")."n         ".color("reset")."      go down by 10 words
+    ".color("bold").color("red")."k or \>    ".color("reset")."      go up by 1 words (i.e. previous word)
+    ".color("bold").color("red")."K         ".color("reset")."      go up by 5 words
+    ".color("bold").color("red")."m         ".color("reset")."      go up by 10 words
+    ".color("bold").color("red")."q         ".color("reset")."      quit
+";
+
+# use Getopt::Long;
+use Getopt::Long qw(GetOptions);
+Getopt::Long::Configure qw(gnu_getopt);
 GetOptions("wpm|w=i" => \$wpm,
-	   "resume|r=i" => \$resume,
-	   "multiword|m" => \$multiword);
+	   "resume|r=f" => \$resume,
+	   "multiword|m" => \$multiword,
+	   "min_word|n=i" => \$min_word,
+	    'c'     => \$show_context,
+	    'P'     => \$paused,
+	    'h|help'     => \$help,
+	    'p'     => \$pause_option
+) or die $HELP_TEXT;
+
 
 my $wordtime = 0.9; # relative to wpm
 my $lentime = 0.04; # * sqrt(length $word), relative to wpm
@@ -64,10 +104,8 @@ my $multitime = 1.2; # relative to wpm
 my $firsttime = 0.2; # [s]
 my $ORPloc = 0.35;
 my $ORPmax = 0.2;
-my $ORPvisualpos = 28;
+my $ORPvisualpos = 80;
 my $cursorpos = 90;
-my $paused = 0;
-my $show_context = 0;
 my $current_word;
 my $current_orp;
 my $next_word_time = 0;
@@ -80,6 +118,7 @@ my @lines;
 my $ln;
 my @words;
 my $wn;
+my $flash=0;
 
 my @lastlines;
 my $tty = rawinput->new();
@@ -97,10 +136,15 @@ sub print_stats {
 }
 $SIG{INT} = sub {
 	print_stats;
-	my $resume_word = $wordcounter + $resume;
+	my $resume_word = $ln + $wn/1000;
 	say " To resume from this point run with argument -r $resume_word";
 	exit;
 };
+
+if ($help) {
+	print $HELP_TEXT;
+	exit;
+}
 
 main();
 
@@ -108,55 +152,83 @@ main();
 # the way Spritz probably does it.
 sub find_ORP {
 	my ($word, $ORPloc) = @_;
+	if (! defined($word)) { $word = "" }
 
 	return 4 if (length($word) > 13);
 	return (0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3)[length($word)];
 }
 
 sub show_guide {
+	my $termwidth = int(`tput cols`);
+	# print "<<$termwidth>>";
+	$ORPvisualpos = int(($termwidth - 30)/10)*10;
+	$cursorpos = int($ORPvisualpos) + 5;
 	# Top visual guide
-	say(" "x($ORPvisualpos + 3) . color('red') . "v" . color('reset') . "\033[K");
+	my ($linenum) = @_;
+	my $lindesc=(sprintf("/%2d", $linenum));
+	say(
+		" "x(int(($ORPvisualpos/2 + 2)))
+		. color('red') . "v" . color('reset')
+		. " "x(int($ORPvisualpos/2 + 2 + 1))
+		. color("grey4") . $lindesc . color("reset")
+		. "\033[K");
+}
+
+sub get_context {
+	my ($wn) = @_;
+	my $word=$words[$wn];
+	my $len = int(($ORPvisualpos - length($word))/2);
+	my $wn0 = join(" ", @words[(max ( 0 , ($wn - 20) )) .. ($wn - 1)]);
+	$wn0 = substr($wn0, -($len+1));
+	my $wn1 = join(" ", @words[($wn + 1) .. min ( $#words , ($wn + 20) )]);
+	$wn1 = substr($wn1, 0, $len-1);
+	my $wn0_ = " " x max( 0, $len + 2 - length($wn0));
+	my $wn1_ = " " x max( 0, $len - length($wn1) + (length($word)%2) );
+	return ($wn0, $wn1, $wn0_, $wn1_, $len);
 }
 
 sub show_word {
 	my ($word, $i, $wn, $ln) = @_;
 	if (! defined($word)) { $word = "" }
+	$i = int((length($word)-1)/2);
 
 	my $pivotch = substr($word, $i, 1);
 	$pivotch = "·" if $pivotch eq ' ';
-
+	my $ln_wn=(sprintf("%2d:%3d", $ln, $wn));
+	my $word1;
+	if (($i+1) > length($word)) { $word1 = "" }
+	else {$word1 = substr($word, $i+1);};
+		
 	if ($show_context) {
-		my $wn0 = join(" ", @words[(max ( 0 , ($wn - 20) )) .. ($wn - 1)]);
-		my $wn1 = join(" ", @words[($wn + 1) .. min ( $#words , ($wn + 20) )]);
-		my $len = int((70 - length($word))/2);
+		my ($wn0, $wn1, $wn0_, $wn1_, $len) = get_context($wn);
 		print("\r\033[K"
-				. color("grey5")
-				. substr($wn0, -$len)
-				. color("white") . " "
-				. $words[$wn]
-				. color("grey5") . " "
-				. substr($wn1, 0, $len))
+				. $wn0_ . color("grey5") . $wn0 . " "
+				. color("white") . color("bold") . substr($word, 0, $i)
+				. color("red") . $pivotch . color("reset")
+				. color("bold") . $word1 . color("reset")
+				. color("grey5") . " " . $wn1 . $wn1_
+				. " " x max( 1, ($cursorpos - $len * 2 - length($word) - length("$ln_wn")) )
+				. color("reset") . color("grey4") . "$ln_wn " . color("reset")
+			    . " $wpm wpm"
+			    . (($flash>0) ? "  ".color("red")."!".color("reset") : " ")
+			    . ($paused ? "  ".color("yellow")."PAUSED".color("reset") : "")
+				)
 	} else {
-		print("\r\033[K"
-			. color("grey5")
-			. "$ln-$wn"
-			. color("reset")
-			. " " x ($ORPvisualpos - $i)
-			. color("bold")
-			. substr($word, 0, $i)
-			. color("red")
-			. $pivotch
-			. color("reset")
-			. color("bold")
-			. substr($word, $i+1)
-			. color("reset")
-			. " " x ($cursorpos - (($ORPvisualpos - $i) + length($word)))
-			. "$wpm wpm"
+		my $len = int(($ORPvisualpos - length($word))/2);
+		print("\r\033[K "
+			. " " x (2 + $len)
+			. color("bold") . substr($word, 0, $i)
+			. color("red") . $pivotch . color("reset")
+			. color("bold") . $word1 . color("reset")
+			. " " x max(0, ($cursorpos - $len - length($word) - 0 - length("$ln_wn") + 3 - 0*(length($word) % 2) ))
+			. color("grey3") . "$ln_wn " . color("reset")
+			. " $wpm wpm"
+		    . (($flash>0) ? "  ".color("red")."!".color("reset") : " ")
 			. ($paused ? "  ".color("yellow")."PAUSED".color("reset") : "")
 			);
 
-		}
-		
+	}
+	if ($flash > 0){ $flash--; };
 }
 
 sub word_time {
@@ -217,46 +289,76 @@ sub print_context_org {
 	say $line0;
 }
 
+sub make_words{
+	my ($line) = @_;
+	(@words) = split /(?:-|\s)+/, $line;
+	if ($multiword) {
+		# Join adjecent short words
+		for (my $i = 0; $i < $#words - 1; $i++) {
+			if (length($words[$i]) <= $min_word and length($words[$i+1]) <= $min_word) {
+				# print "\nsplicing\n";
+				$words[$i] .= ' ' . $words[$i+1];
+				splice(@words, $i+1, 1);
+			}
+		}
+	}
+	return @words;
+}
+
+sub goPrev {
+	# my ($wn, $ln) = @_;
+	if ($wn > 0) { $wn--; } elsif ( $ln > 0 ) { $ln--;  @words = make_words($lines[$ln]); $wn=$#words; }
+	$current_word = $words[$wn];
+	$wordcounter--;
+	$lettercounter -= length($current_word);
+	return ($wn, $ln, @words);
+}
+
+
+sub goNext {
+	# my ($wn, $ln) = @_;
+	if ($wn < $#words) { $wn++; } elsif ( $ln < $#lines ) { $ln++;  @words = make_words($lines[$ln]); $wn=0; }
+	$current_word = $words[$wn];
+	if (! defined($current_word)) { $current_word = "" }
+	$wordcounter++;
+	$lettercounter += length($current_word);
+	return ($wn, $ln, @words);
+}
+
+
 sub main {
-	print "\n";
-	show_guide();
+	# print "\n";
 
 	$next_word_time = time();
 	$next_input_time = time();
 	my $line;
 	@lines=<>;
+	show_guide($#lines);
 
 	for ($ln = 0; $ln <= $#lines; $ln++) {
+		if ($ln < ($resume-1)) { next; }
+		my $resume_wrd = int(1000*($resume - $ln));
 	    $line = $lines[$ln];
 
 		unshift @lastlines, $line;
-
-		(@words) = split /(?:-|\s)+/, $line;
-
-		if ($multiword) {
-			# Join adjecent short words
-			for (my $i = 0; $i < $#words - 1; $i++) {
-				if (length($words[$i]) <= 3 and length($words[$i+1]) <= 3) {
-					$words[$i] .= ' ' . $words[$i+1];
-					splice(@words, $i+1, 1);
-				}
-			}
-		}
+		@words = make_words($line);
 
 		$wn = -1;
 		while ($wn <= $#words) {
-			if ($skipped < $resume) {
-				$skipped++;
-				$wn++;
-				skip_word(@words);
-				next;
-			}
+			if ($wn < ($resume_wrd-1)) {
+				$wn++; next;
+				} else { $resume = 0; $resume_wrd = 0; }
 
 			my $current_time = time();
 
 			if ($next_word_time <= $current_time and !$paused) {
-				if ($wn < $#words) { $wn++; } elsif ( $ln < $#lines ) { $ln++; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=0; }
+				if ($wn < $#words) { $wn++;
+					if (($wn == $#words - 1) and ($pause_option)){ $paused = 1; }
+					} elsif ( $ln < $#lines ) {
+					$ln++; @words = make_words($lines[$ln]); $wn=0;
+				}
 				$current_word = $words[$wn];
+				if (! defined($current_word)) { $current_word = "" }
 				$current_orp = find_ORP($current_word, $ORPloc);
 				$next_word_time += word_time($current_word);
 				$wordcounter++;
@@ -266,45 +368,103 @@ sub main {
 			if ($next_input_time <= $current_time) {
 				while ($tty->key_pressed()) {
 					my $ch = $tty->getch();
-					if ($ch eq ',' or $ch eq 'h') { $wpm = int($wpm - 50); }
-					elsif ($ch eq '.' or $ch eq 'l') { $wpm = int($wpm + 50); }
+					if ($ch eq ',') { $wpm = int($wpm - 50); }
+					elsif ($ch eq '.') { $wpm = int($wpm + 50); }
+					elsif ($ch eq "\n") { $paused = 0; $next_word_time = time(); }
+					elsif ($ch eq "'") {
+						$flash=20;
+						# my ($wn0, $wn1, $wn0_, $wn1_) = get_context($wn);
+						open(my $fd, ">>notes.log") or die;
+						# print $fd (sprintf("\n%d:%d\t%s>", $ln, $wn, join(" ", @words[ max(0, $wn - 10) .. min($#words, $wn+10) ])));
+						# join(" ", @words[max(0,$wn) .. $wn-1]), 
+						print $fd (sprintf("\n[%s]L%d:W%d\t[%s] %s", `date '+%Y%m%d:%H%M' | tr -d '\n'`, $ln, $wn, $words[$wn], join(" ", @words[$wn+1 .. min($#words, $wn+20)])));
+						# print $fd (sprintf("\n%d:%d\t%s>", $ln, $wn, (" ".join(@words))));
+					}
 					elsif ($ch eq ' ' | $ch eq 'p') {
 						$paused = not $paused;
 						if (not $paused) { $next_word_time = time(); };
-					} elsif ($ch eq 'c') {
+					}
+					elsif ($ch eq 'c' | $ch eq 'o') {
 						if (not $show_context) {
 							$show_context = 1;
 						} else {
 							$show_context = 0;
 						}
 					}
-					elsif ($ch eq '<' or $ch eq 'k' or $ch eq 'K') {
+					elsif ($ch eq '<' or $ch eq 'k' or $ch eq 'K' or $ch eq 'm' or $ch eq ';' or $ch eq '<') {
 						$imax = 1;
-						if ($ch eq 'K' and $wn > 0) { $imax = 10; }
+						if ($ch eq 'K' and $wn > 0) {
+							$imax = 5;
+							$paused=1;
+						}
+						if ($ch eq 'm' and $wn > 0) { $imax = 10; }
+						if ($ch eq ';' or $ch eq '<') { $imax = max($wn, 1); }
 						for($i=1; $i<=$imax; $i++){
-							if ($wn > 0) { $wn--; } elsif ( $ln > 0 ) { $ln--; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=$#words; }
+							goPrev();
+							if ($ch eq '<') {
+								if ((length($current_word) > 2 ) and (substr($current_word, -1, 1) eq ".") and ($i > 1)){
+									goNext();
+									next;
+								}
+							}
+						 }
+						$next_word_time += word_time($current_word);
+						$current_orp = find_ORP($current_word, $ORPloc);
+						}
+					elsif ($ch eq '>' or $ch eq 'j' or $ch eq 'J' or $ch eq 'n') {
+						$imax = 1;
+						if ($ch eq 'J') { $imax = 5; }
+						if ($ch eq 'n') { $imax = 10; }
+						if ($ch eq '>') { $imax = max($#words - $wn, 1); }
+						for($i=1; $i<=$imax; $i++){
+							goNext();
+							if ($ch eq '>') {
+								if ((length($current_word) > 2 ) and (substr($current_word, -1, 1) eq ".")){
+									$imax = $i + 1;
+								}
+							}
+						}
+						$next_word_time += word_time($current_word);
+						$current_orp = find_ORP($current_word, $ORPloc);
+					}
+					elsif ($ch eq 'l' | $ch eq 'L') {
+						$imax = 1;
+						if ($ch eq 'L' and $wn > 0) { $imax = 5; }
+						for($i=1; $i<=$imax; $i++){
+							if ($ln > 0) {
+								$wordcounter=$wordcounter-$wn;
+								$ln--; @words = make_words($lines[$ln]); $wn=0;
+							}
 							$current_word = $words[$wn];
 							$next_word_time += word_time($current_word);
-							$wordcounter--;
 							$lettercounter -= length($current_word);
 						 }
 						$current_orp = find_ORP($current_word, $ORPloc);
 						}
-					elsif ($ch eq '>' or $ch eq 'j' or $ch eq 'J') {
+					elsif ($ch eq 'h' | $ch eq 'H') {
 						$imax = 1;
-						if ($ch eq 'J') { $imax = 10; }
+						if ($ch eq 'H') { $imax = 5; }
 						for($i=1; $i<=$imax; $i++){
-							if ($wn < $#words) { $wn++; } elsif ( $ln < $#lines ) { $ln++; @words=split /(?:-|\s)+/, $lines[$ln]; $wn=0; }
+							if ($ln < $#lines-1) {
+								$wordcounter=$wordcounter+($#words - $wn);
+								$ln++; @words = make_words($lines[$ln]); $wn=0;
+							}
 							$current_word = $words[$wn];
 							$next_word_time += word_time($current_word);
-							$wordcounter++;
 							$lettercounter += length($current_word);
 						}
 						$current_orp = find_ORP($current_word, $ORPloc);
 					}
-					elsif ($ch eq 'q') { exit; }
+					elsif ($ch eq 'q') { exit(130); }
+					elsif ($ch eq 'i' or $ch eq '[') {
+						print_stats();
+						my $resume_word = $ln + $wn/1000;
+						say " To resume from this point run with argument -r $resume_word";
+						exit(131);
+					}
+					elsif ($ch eq 'C' or $ch eq ']') { system("clear"); }
 				}
-				$next_input_time += 0.05; # checking for input 20 times / second seems to give a reasonably responsive UI
+				$next_input_time += 0.02; # checking for input 20 times / second seems to give a reasonably responsive UI
 			}
 
 			# redrawing the word on each "frame" gives a more responsive UI
