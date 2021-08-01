@@ -236,7 +236,7 @@ sub word_time {
 	if (! defined($word)) { $word = "" }
 
 	my $time = $wordtime;
-	if ($word =~ /[\.\?]\W*$/) {
+	if ($word =~ /[.?!]\W*$/) {
 		$time = $fstoptime;
 	} elsif ($word =~ /[:;,]\W*$/) {
 		$time = $commatime;
