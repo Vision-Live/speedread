@@ -35,6 +35,16 @@
 #   q - quit
 # 
 
+if (defined $word) {
+    my $modulus = $num % $word;
+    ...
+}
+
+if (defined $word) {
+    my $difference = $num - $word;
+    ...
+}
+
 use warnings;
 use strict;
 use autodie;
@@ -310,7 +320,9 @@ sub goPrev {
 	if ($wn > 0) { $wn--; } elsif ( $ln > 0 ) { $ln--;  @words = make_words($lines[$ln]); $wn=$#words; }
 	$current_word = $words[$wn];
 	$wordcounter--;
+	if (defined $current_word) {
 	$lettercounter -= length($current_word);
+    }
 	return ($wn, $ln, @words);
 }
 
@@ -319,9 +331,10 @@ sub goNext {
 	# my ($wn, $ln) = @_;
 	if ($wn < $#words) { $wn++; } elsif ( $ln < $#lines ) { $ln++;  @words = make_words($lines[$ln]); $wn=0; }
 	$current_word = $words[$wn];
-	if (! defined($current_word)) { $current_word = "" }
-	$wordcounter++;
-	$lettercounter += length($current_word);
+	if (defined $current_word) {
+        $wordcounter++;
+        $lettercounter += length($current_word);
+    }
 	return ($wn, $ln, @words);
 }
 
@@ -437,8 +450,10 @@ sub main {
 							}
 							$current_word = $words[$wn];
 							$next_word_time += word_time($current_word);
+							if (defined $current_word) {
 							$lettercounter -= length($current_word);
 						 }
+}
 						$current_orp = find_ORP($current_word, $ORPloc);
 						}
 					elsif ($ch eq 'h' | $ch eq 'H') {
@@ -451,7 +466,9 @@ sub main {
 							}
 							$current_word = $words[$wn];
 							$next_word_time += word_time($current_word);
+							if (defined $current_word) {
 							$lettercounter += length($current_word);
+						}
 						}
 						$current_orp = find_ORP($current_word, $ORPloc);
 					}
