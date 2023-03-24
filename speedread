@@ -186,7 +186,7 @@ sub show_guide {
 
 sub get_context {
 	my ($wn) = @_;
-	my $word=$words[$wn];
+	my $word = ($words[$wn] || "");
 	my $len = int(($ORPvisualpos - length($word))/2);
 	my $wn0 = join(" ", @words[(max ( 0 , ($wn - 20) )) .. ($wn - 1)]);
 	$wn0 = substr($wn0, -($len+1));
